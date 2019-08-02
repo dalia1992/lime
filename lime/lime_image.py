@@ -13,6 +13,7 @@ from skimage.color import gray2rgb
 from . import lime_base
 from .wrappers.scikit_image import SegmentationAlgorithm
 
+import sys
 
 class ImageExplanation(object):
     def __init__(self, image, segments):
@@ -127,7 +128,9 @@ class LimeImageExplainer(object):
                          segmentation_fn=None,
                          distance_metric='cosine',
                          model_regressor=None,
-                         random_seed=None):
+                         random_seed=None,
+                         suppress_1=False,
+                         suppress_all_but_1=False):
         """Generates explanations for a prediction.
 
         First, we generate neighborhood data by randomly perturbing features
@@ -158,6 +161,8 @@ class LimeImageExplainer(object):
             random_seed: integer used as random seed for the segmentation
                 algorithm. If None, a random integer, between 0 and 1000,
                 will be generated using the internal random number generator.
+            suppress_1: Deletes only one superpixel
+            suppress_all_but_1: Deletes all superpixels but one
 
         Returns:
             An Explanation object (see explanation.py) with the corresponding
@@ -191,8 +196,10 @@ class LimeImageExplainer(object):
 
         data, labels = self.data_labels(image, fudged_image, segments,
                                         classifier_fn, num_samples,
-                                        batch_size=batch_size)
-
+                                        batch_size=batch_size,
+                                        suppress_1=suppress_1,
+                                        suppress_all_but_1=suppress_all_but_1)
+        
         distances = sklearn.metrics.pairwise_distances(
             data,
             data[0].reshape(1, -1),
@@ -219,7 +226,9 @@ class LimeImageExplainer(object):
                     segments,
                     classifier_fn,
                     num_samples,
-                    batch_size=10):
+                    batch_size=10, 
+                    suppress_1=False,
+                    suppress_all_but_1=False):
         """Generates images and predictions in the neighborhood of this image.
 
         Args:
@@ -238,8 +247,20 @@ class LimeImageExplainer(object):
                 labels: prediction probabilities matrix
         """
         n_features = np.unique(segments).shape[0]
-        data = self.random_state.randint(0, 2, num_samples * n_features)\
-            .reshape((num_samples, n_features))
+        if suppress_1 and suppress_all_but_1:
+                #sys.exit('Cannot suppres all but one and only one simultaneously')
+                num_samples=n_features*2
+                np.concatenate((np.identity(n_features),abs(np.identity(n_features)-1)),axis=0)
+        if suppress_1:
+            num_samples=n_features
+            data = np.identity(n_features)
+            
+        elif suppress_all_but_1:
+            num_samples=n_features
+            data = abs(np.identity(n_features)-1)
+        else:
+            data = self.random_state.randint(0, 2, num_samples * n_features)\
+                .reshape((num_samples, n_features))
         labels = []
         data[0, :] = 1
         imgs = []
@@ -252,10 +273,13 @@ class LimeImageExplainer(object):
             temp[mask] = fudged_image[mask]
             imgs.append(temp)
             if len(imgs) == batch_size:
-                preds = classifier_fn(np.array(imgs))
-                labels.append(preds)
+                imgs= np.vstack(imgs)
+                preds = classifier_fn(imgs, batch_size=batch_size)
+                labels.extend(preds)
                 imgs = []
         if len(imgs) > 0:
-            preds = classifier_fn(np.array(imgs))
+            imgs= np.vstack(imgs)
+            preds = classifier_fn(np.array(imgs), batch_size=len(imgs))
             labels.extend(preds)
+        #print(labels)
         return data, np.array(labels)
